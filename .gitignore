@@ -37,3 +37,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Ferramentas de agente (nao fazem parte do entregavel)
+.claude/
