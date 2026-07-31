@@ -158,6 +158,65 @@ describe("streamChat", () => {
     expect(calls.errors).toEqual([{ code: "RATE_LIMITED", message: "Muitas requisicoes." }]);
   });
 
+  it("avisa quando o stream termina sem done nem error", async () => {
+    // The failure this guards against: the backend dies mid-answer and closes the connection.
+    // Without a terminal event the loop simply ends, no handler fires, and the message stays on
+    // screen streaming forever — waiting for a token that is never coming.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          sseResponse([
+            'event: token\ndata: {"delta":"Comecei a resp"}\n\n',
+            // and then nothing: no done, no error, connection closed
+          ]),
+        ),
+      ),
+    );
+    const { calls, spy } = handlers();
+
+    await streamChat("token", "oi", spy);
+
+    expect(calls.tokens.join("")).toBe("Comecei a resp");
+    expect(calls.errors).toEqual([
+      {
+        code: "STREAM_INCOMPLETE",
+        message: "A resposta foi interrompida antes do fim. Tente novamente.",
+      },
+    ]);
+  });
+
+  it("nao reclama quando o proprio cliente cancelou o stream", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(sseResponse([]))),
+    );
+    const { calls, spy } = handlers();
+
+    await streamChat("token", "oi", spy, controller.signal);
+
+    expect(calls.errors).toEqual([]);
+  });
+
+  it("um frame de error tambem encerra o stream", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          sseResponse(['event: error\ndata: {"code":"AGENT_FAILED","message":"Falhou."}\n\n']),
+        ),
+      ),
+    );
+    const { calls, spy } = handlers();
+
+    await streamChat("token", "oi", spy);
+
+    // Exactly one error: the terminal frame, not that one plus an "incomplete" complaint.
+    expect(calls.errors).toEqual([{ code: "AGENT_FAILED", message: "Falhou." }]);
+  });
+
   it("envia o token de sessao no header, nunca na URL", async () => {
     const fetchSpy = vi.fn(() =>
       Promise.resolve(

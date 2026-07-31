@@ -71,6 +71,10 @@ export async function streamChat(
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
+  // Every well-formed response ends in `done` or `error`. If the stream closes without either,
+  // something died server-side mid-answer — and the caller has to hear about it, or the message
+  // stays on screen with a blinking cursor forever waiting for a token that will never arrive.
+  let sawTerminalEvent = false;
 
   try {
     for (;;) {
@@ -85,8 +89,17 @@ export async function streamChat(
 
       for (const raw of frames) {
         const frame = parseFrame(raw);
-        if (frame) dispatch(frame, handlers);
+        if (!frame) continue;
+        if (frame.event === "done" || frame.event === "error") sawTerminalEvent = true;
+        dispatch(frame, handlers);
       }
+    }
+
+    if (!sawTerminalEvent && !signal?.aborted) {
+      handlers.onError({
+        code: "STREAM_INCOMPLETE",
+        message: "A resposta foi interrompida antes do fim. Tente novamente.",
+      });
     }
   } catch {
     if (!signal?.aborted) {
