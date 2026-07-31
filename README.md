@@ -40,8 +40,8 @@ carregada dentro do `<iframe>` do integrador.
 └───────────────────────────────────────────────────────────────┘
 ```
 
-O widget fala **direto** com a API, sem passar por um BFF: um proxy intermediário só adicionaria
-uma camada para bufferizar o SSE e reescrever o `Origin` que autoriza o embed.
+O widget fala direto com a API, sem BFF no meio. Um proxy intermediário bufferizaria o SSE e
+reescreveria justamente o `Origin` que autoriza o embed.
 
 ---
 
@@ -82,9 +82,9 @@ O seed do backend já cria uma chave de embed e imprime o link pronto — abra
 Do "criar tutor" ao "iframe respondendo", com o que acontece em cada passo:
 
 1. **Criar o tutor** em `/tutors/new`: título, instruções de comportamento e fontes (URL pública
-   ou texto colado). Na tela de edição, cada fonte mostra **quanto texto o agente conseguiu ler**
-   — ou o erro, se a URL for inalcançável. Descobrir isso aqui é o ponto; antes só aparecia no
-   meio de uma conversa.
+   ou texto colado). Na tela de edição, cada fonte mostra quanto texto o agente conseguiu ler, ou
+   o erro, se a URL for inalcançável. Uma URL quebrada aparece aqui, no cadastro, e não no meio de
+   uma conversa com o usuário final.
 2. **Gerar a chave** em `/tutors/[id]/embed`, com o domínio do integrador nas origens permitidas.
    A tela devolve o snippet pronto:
 
@@ -108,7 +108,7 @@ Do "criar tutor" ao "iframe respondendo", com o que acontece em cada passo:
    histórico.
 5. **A conversa** vai por `POST /embed/chat` em SSE. Os tokens aparecem à medida que chegam, e a
    linha de atividade nomeia a fonte sendo consultada ("Procurando em _Política de trabalho
-   remoto_…") — é onde a estratégia agêntica fica visível para quem está olhando.
+   remoto_…"), o que torna visível qual ferramenta o agente decidiu usar.
 6. **As citações** aparecem como chips no rodapé da resposta, com link para a fonte.
 
 Chave revogada, origem removida da allowlist ou tutor desativado: o widget informa a
@@ -126,7 +126,7 @@ docker build \
 docker run -p 3000:3000 dot-tutors-frontend
 ```
 
-Duas coisas que só mordem em produção:
+Dois detalhes que só aparecem em produção:
 
 - **`NEXT_PUBLIC_*` é inlinado no bundle em tempo de build.** Mudar a URL da API exige um
   rebuild; reiniciar o container não adianta.
@@ -165,15 +165,15 @@ pnpm verify        # lint + format:check + typecheck + test
 | `pnpm test:e2e`                     | Playwright: 8 cenários por um `<iframe>` real     |
 | `pnpm build`                        | Build de produção — parte do gate, não um detalhe |
 
-Tudo roda no CI a cada push e pull request, mais um job que **constrói a imagem Docker e verifica
-que ela sobe e serve uma página**. O build entra no gate porque um erro de Server/Client Component
-passa pelo `tsc` e só falha ali.
+Tudo roda no CI a cada push e pull request, mais um job que constrói a imagem Docker e verifica que
+ela sobe e serve uma página. O `pnpm build` entra no gate porque um erro de fronteira entre Server
+e Client Component passa pelo `tsc` e só estoura no build.
 
-O E2E roda contra o **build de produção**, pelo mesmo motivo: a CSP do widget difere entre dev e
-produção, e é a de produção que não pode quebrar a hidratação. Ele cobre o critério §7.3 através
-de um iframe cross-document de verdade — um teste de componente renderizaria o widget inline e
-pularia silenciosamente a CSP, a política de enquadramento e a requisição cross-origin, que são
-justamente as camadas que só existem porque isto é incorporado.
+O E2E roda contra o build de produção pelo mesmo motivo: a CSP do widget difere entre dev e
+produção, e é a de produção que precisa não quebrar a hidratação. O critério §7.3 é coberto por um
+iframe cross-document real, porque um teste de componente renderizaria o widget inline e pularia a
+CSP, a política de enquadramento e a requisição cross-origin — as três camadas que existem
+exatamente por isto ser incorporado em site de terceiro.
 
 ---
 
@@ -181,60 +181,58 @@ justamente as camadas que só existem porque isto é incorporado.
 
 ### Um app para admin e widget
 
-As duas superfícies têm requisitos opostos — o admin é autenticado e roda no domínio próprio; o
-widget é anônimo e roda dentro do site de terceiros. Ainda assim, um único projeto, por um motivo
-concreto: **`Content-Security-Policy: frame-ancestors` é um header de resposta da página
-enquadrada**, então só o servidor que a hospeda pode emiti-lo. Como a allowlist é por chave de
-embed e vive no banco, montar esse header exige uma consulta em tempo de requisição — que um
-bucket estático não faria. O isolamento visual vem de um `layout.tsx` próprio do grupo de rotas
-do widget, não de um deploy separado.
+As duas superfícies têm requisitos opostos: o admin é autenticado e roda no domínio próprio, o
+widget é anônimo e roda dentro do site de terceiros. Mesmo assim são um projeto só, e o motivo é
+o `Content-Security-Policy: frame-ancestors`. Ele é um header de resposta da página enquadrada,
+então só o servidor que a hospeda pode emiti-lo, e como a allowlist é por chave de embed e vive no
+banco, montá-lo exige uma consulta em tempo de requisição — que hospedagem estática não faria. O
+isolamento visual vem de um `layout.tsx` próprio do grupo de rotas do widget, não de um deploy
+separado.
 
 ### `fetch` + `ReadableStream` em vez de `EventSource`
 
-Não é preferência de estilo. `EventSource` só emite GET e não permite header `Authorization`, o
-que forçaria o token de sessão para a query string — onde todo proxy do caminho o registra. O
-parser de SSE é escrito à mão e só consome frames inteiros: TCP não respeita fronteira de
-mensagem, e um parser que trata cada chunk como um frame perde dados justamente quando a resposta
-é longa. Há teste para o frame partido ao meio.
+`EventSource` só emite GET e não aceita header `Authorization`, o que empurraria o token de sessão
+para a query string, onde todo proxy do caminho o registra em log. O parser de SSE é escrito à mão
+e só consome frames inteiros: TCP não respeita fronteira de mensagem, e um parser que trata cada
+chunk como um frame perde dados justamente quando a resposta é longa. Há teste para o frame
+partido ao meio.
 
 ### Nenhum cookie no fluxo de embed
 
-Navegadores bloqueiam cookie de terceiro dentro de iframe (ITP no Safari, Chrome), então uma
-sessão por cookie simplesmente não funcionaria para o integrador que este produto existe para
-atender. O token vive em `sessionStorage` — isolado por aba e, em navegadores modernos,
-particionado por site hospedeiro — e viaja no header `Authorization`. O token do admin segue a
-mesma regra: como este app também serve o widget, manter credenciais fora de cookie garante que
-nenhuma requisição carregue autoridade ambiente entre origens.
+Navegadores bloqueiam cookie de terceiro dentro de iframe (ITP no Safari, Chrome), então uma sessão
+por cookie não funcionaria no cenário para o qual este produto existe. O token vive em
+`sessionStorage`, isolado por aba e, em navegadores modernos, particionado por site hospedeiro, e
+viaja no header `Authorization`. O token do admin segue a mesma regra: como este app também serve o
+widget, manter as credenciais fora de cookie evita que qualquer requisição carregue autoridade
+ambiente entre origens.
 
 ### Texto do modelo nunca vira HTML
 
-A saída do modelo é influenciável pelas fontes de conhecimento do próprio tutor. Transformá-la em
-markup seria a superfície de XSS mais óbvia do projeto.
+A saída do modelo é influenciável pelas fontes de conhecimento do próprio tutor, então transformá-la
+em markup é a superfície de XSS mais direta do projeto.
 
-A resposta é renderizada como **Markdown**, com `react-markdown` construindo elementos React a
-partir da árvore sintática e **descartando HTML embutido** — o que só mudaria adicionando
-`rehype-raw`, que é exatamente o plugin que transformaria uma fonte hostil em execução de script
-dentro da página do integrador. Ele não está aqui e não pode entrar. Há também uma allowlist
-explícita de elementos permitidos.
+A resposta é renderizada como Markdown, com `react-markdown` construindo elementos React a partir
+da árvore sintática e descartando HTML embutido, mais uma allowlist explícita dos elementos
+permitidos. Isso só mudaria com `rehype-raw`, que é o plugin capaz de transformar uma fonte hostil
+em execução de script dentro da página do integrador; ele não está no projeto e não deve entrar.
 
-A alternativa anterior — texto puro — era segura e ilegível: modelos respondem em Markdown, então
-o usuário via `**negrito**` e `*` literais. Segurança e legibilidade não estavam em conflito; só
-a implementação errada de segurança estava. Testes cobrem os dois lados: `<img onerror>` e
-`<script>` não viram elemento, e `**negrito**` vira `<strong>`.
+A primeira versão renderizava texto puro. Era segura e ilegível, porque modelos respondem em
+Markdown e o usuário via `**negrito**` e `*` literais na tela. Testes cobrem os dois lados:
+`<img onerror>` e `<script>` não viram elemento, `**negrito**` vira `<strong>`.
 
 ### CSP com nonce por requisição
 
-`frame-ancestors` decide quem pode enquadrar a página; `script-src` usa um **nonce novo a cada
-requisição**, carimbado nas tags de script pelo próprio Next. Um script injetado não tem como
-adivinhá-lo. O detalhe que faz funcionar é que a política precisa estar nos headers da
-_requisição_, não só da resposta — é de lá que o Next extrai o nonce.
+`frame-ancestors` decide quem pode enquadrar a página; `script-src` usa um nonce novo a cada
+requisição, carimbado nas tags de script pelo próprio Next, de modo que um script injetado não tem
+como adivinhá-lo. O detalhe que faz isso funcionar é que a política precisa estar nos headers da
+_requisição_, não só da resposta: é de lá que o Next extrai o nonce.
 
 ---
 
 ## Limitações conhecidas do MVP
 
-- **`style-src` mantém `'unsafe-inline'`.** O Tailwind injeta estilos em runtime e um nonce não
-  cobre isso. O vetor relevante (execução de script) está fechado.
+- **`style-src` mantém `'unsafe-inline'`.** O Tailwind injeta estilos em runtime e o nonce não
+  cobre esse caso. `script-src`, que é o vetor de execução, continua fechado.
 - **Sessão do admin morre ao fechar a aba** (`sessionStorage`), sem refresh token.
 - **Sem i18n.** Interface apenas em português.
 - **O E2E stuba o backend.** Prova o contrato do iframe, não a integração com o modelo — essa é
