@@ -67,3 +67,44 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  image:
+    name: Container image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The deployed app is this image, so it is built on every push rather than being a file
+    # nobody ever ran. `NEXT_PUBLIC_*` values are inlined at build time, which is exactly the
+    # kind of thing that only breaks once you try to build it.
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: dot-tutors-frontend:ci
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+            NEXT_PUBLIC_APP_BASE_URL=http://localhost:3000
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The image starts and serves a page
+        run: |
+          docker run -d --name web -p 3000:3000 dot-tutors-frontend:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/ > /dev/null; then
+              echo "o frontend respondeu na tentativa $attempt"
+              docker rm -f web
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "o frontend nao subiu"
+          docker logs web
+          exit 1
