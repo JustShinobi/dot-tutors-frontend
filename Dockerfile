@@ -42,13 +42,14 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 1000 nextjs
+# The official Node images already ship an unprivileged `node` user at uid 1000, so creating
+# another one there fails outright ("UID 1000 is not unique"). Reusing it is both the idiomatic
+# choice and the only one that builds.
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
-COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nextjs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nextjs /app/public ./public
-
-USER nextjs
+USER node
 
 EXPOSE 3000
 
