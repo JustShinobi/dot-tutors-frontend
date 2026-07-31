@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { useAutoResize } from "@/lib/hooks/useAutoResize";
 import { useEmbedSession } from "@/lib/hooks/useEmbedSession";
 
 import { MessageBubble } from "./MessageBubble";
@@ -19,7 +20,20 @@ export function ChatWidget({ embedKey }: { embedKey: string }) {
   const { status, tutor, messages, error, sending, activity, send } = useEmbedSession(embedKey);
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Optional for the host: ignoring the message keeps the fixed height from the snippet.
+  // Enabled only once the conversation is on screen: while connecting, the component renders a
+  // different tree and the refs below point at nothing.
+  useAutoResize({
+    embedKey,
+    contentRef,
+    chromeRefs: [headerRef, composerRef],
+    enabled: status === "ready",
+  });
 
   // Follow the conversation as it grows, including while tokens stream in.
   useEffect(() => {
@@ -62,32 +76,45 @@ export function ChatWidget({ embedKey }: { embedKey: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-border shrink-0 border-b px-4 py-3">
+      <header ref={headerRef} className="border-border shrink-0 border-b px-4 py-3">
         <h1 className="truncate text-sm font-semibold">{tutor?.title}</h1>
         {tutor?.description && <p className="text-muted truncate text-xs">{tutor.description}</p>}
       </header>
 
       <div
         ref={listRef}
-        className="flex-1 space-y-3 overflow-y-auto px-4 py-4"
+        className="flex-1 overflow-y-auto px-4 py-4"
         role="log"
         aria-live="polite"
         aria-label="Conversa com o tutor"
       >
-        {tutor?.greeting && messages.length === 0 && (
-          <MessageBubble
-            message={{ id: "greeting", role: "assistant", content: tutor.greeting, citations: [] }}
-          />
-        )}
+        {/* Unconstrained wrapper: its height is what the conversation would occupy, which is
+            what `useAutoResize` reports to the host. */}
+        <div ref={contentRef} className="space-y-3">
+          {tutor?.greeting && messages.length === 0 && (
+            <MessageBubble
+              message={{
+                id: "greeting",
+                role: "assistant",
+                content: tutor.greeting,
+                citations: [],
+              }}
+            />
+          )}
 
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))}
 
-        {activity && <ToolActivityLine activity={activity} />}
+          {activity && <ToolActivityLine activity={activity} />}
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="border-border shrink-0 border-t p-3">
+      <form
+        ref={composerRef}
+        onSubmit={handleSubmit}
+        className="border-border shrink-0 border-t p-3"
+      >
         <div className="flex items-end gap-2">
           <label htmlFor="composer" className="sr-only">
             Sua mensagem

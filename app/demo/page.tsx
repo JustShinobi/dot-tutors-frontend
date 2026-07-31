@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { ResizingEmbed } from "@/components/embed/ResizingEmbed";
+
 /**
  * A page pretending to be an integrator's website.
  *
@@ -33,14 +35,10 @@ export default function DemoPage() {
         <h2 className="text-lg font-medium">Precisa de ajuda?</h2>
 
         {embedKey ? (
-          <iframe
-            src={`${appBaseUrl}/embed/${embedKey}`}
+          <ResizingEmbed
+            embedUrl={`${appBaseUrl}/embed/${embedKey}`}
+            embedKey={embedKey}
             title="Tutor de duvidas"
-            width={400}
-            height={620}
-            loading="lazy"
-            referrerPolicy="strict-origin-when-cross-origin"
-            className="border-border mt-3 rounded-xl border"
           />
         ) : (
           <div className="border-border bg-surface mt-3 space-y-2 rounded-xl border border-dashed p-6 text-sm">
