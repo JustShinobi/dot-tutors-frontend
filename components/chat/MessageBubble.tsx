@@ -2,13 +2,15 @@
 
 import type { UiMessage } from "@/lib/hooks/useEmbedSession";
 
+import { AssistantText } from "./AssistantText";
+
 /**
  * One message.
  *
- * The assistant's text is rendered as **plain text**, never as HTML. Model output is
- * attacker-influenceable through the tutor's own knowledge sources, so injecting it into the DOM
- * would be the most obvious XSS hole in this project (see AGENTS.md). Line breaks are preserved
- * with CSS instead of markup.
+ * The user's own text is rendered verbatim; the assistant's goes through `AssistantText`, which
+ * parses Markdown into React elements and never emits raw HTML. Model output is
+ * attacker-influenceable through the tutor's own knowledge sources, so turning it into markup
+ * would be the most obvious XSS hole in this project (see AGENTS.md).
  */
 export function MessageBubble({ message }: { message: UiMessage }) {
   const isUser = message.role === "user";
@@ -18,14 +20,21 @@ export function MessageBubble({ message }: { message: UiMessage }) {
       <div className={isUser ? "max-w-[85%]" : "max-w-[92%] space-y-1.5"}>
         <div
           className={[
-            "rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap",
+            "rounded-2xl px-3 py-2 text-sm",
+            // Only the user's message needs CSS to preserve line breaks; the assistant's goes
+            // through the Markdown renderer, which produces real paragraphs.
+            isUser || message.failed ? "whitespace-pre-wrap" : "",
             isUser ? "bg-accent text-accent-foreground rounded-br-sm" : "bg-surface rounded-bl-sm",
             message.failed ? "text-danger" : "",
           ]
             .filter(Boolean)
             .join(" ")}
         >
-          {message.content}
+          {isUser || message.failed ? (
+            message.content
+          ) : (
+            <AssistantText>{message.content}</AssistantText>
+          )}
           {message.streaming && !message.content && (
             <span className="text-muted" aria-label="Escrevendo">
               &hellip;

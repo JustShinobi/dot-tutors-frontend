@@ -28,12 +28,15 @@ import { RESIZE_MESSAGE, type ResizeMessage } from "@/lib/embed-messaging";
  */
 export function useAutoResize({
   embedKey,
+  scrollRef,
   contentRef,
   chromeRefs,
   enabled = true,
 }: {
   embedKey: string;
-  /** Wrapper inside the scroll container; its height is the unconstrained conversation height. */
+  /** The scroll container. Its `scrollHeight` includes the content *and* its own padding. */
+  scrollRef: RefObject<HTMLElement | null>;
+  /** Wrapper inside the scroll container; watched so growth triggers a new measurement. */
   contentRef: RefObject<HTMLElement | null>;
   /** Fixed parts around the scroll area (header, composer). */
   chromeRefs: RefObject<HTMLElement | null>[];
@@ -44,12 +47,16 @@ export function useAutoResize({
   useEffect(() => {
     if (!enabled || window.parent === window) return;
 
+    const scroll = scrollRef.current;
     const content = contentRef.current;
-    if (content === null) return;
+    if (scroll === null || content === null) return;
 
     const post = () => {
       const chrome = chromeRefs.reduce((total, ref) => total + (ref.current?.offsetHeight ?? 0), 0);
-      const natural = Math.ceil(content.scrollHeight + chrome);
+      // `scrollHeight` of the container, not of the inner wrapper: the wrapper's height omits
+      // the container's own vertical padding, and the few pixels missing were enough to clip
+      // the composer at the bottom of the iframe.
+      const natural = Math.ceil(scroll.scrollHeight + chrome);
 
       if (natural <= 0 || natural === lastHeight.current) return;
       lastHeight.current = natural;
@@ -60,6 +67,8 @@ export function useAutoResize({
 
     post();
 
+    // The container's own box never changes (it is `flex-1`), so the *content* is what must be
+    // observed for the callback to fire as the answer grows.
     const observer = new ResizeObserver(post);
     observer.observe(content);
     for (const ref of chromeRefs) {
@@ -69,5 +78,5 @@ export function useAutoResize({
     return () => observer.disconnect();
     // `chromeRefs` is a stable literal from the caller; the refs themselves never change identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embedKey, enabled, contentRef]);
+  }, [embedKey, enabled, scrollRef, contentRef]);
 }

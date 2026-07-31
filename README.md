@@ -65,11 +65,18 @@ pnpm verify        # lint + format:check + typecheck + test
 | `pnpm lint`                         | ESLint (config do Next + integração com Prettier) |
 | `pnpm format` / `pnpm format:check` | Prettier                                          |
 | `pnpm typecheck`                    | `tsc --noEmit`                                    |
-| `pnpm test`                         | Vitest + Testing Library                          |
+| `pnpm test`                         | Vitest + Testing Library (41 testes)              |
+| `pnpm test:e2e`                     | Playwright: 8 cenários por um `<iframe>` real     |
 | `pnpm build`                        | Build de produção — parte do gate, não um detalhe |
 
 Tudo roda no CI a cada push e pull request. O build entra no gate porque um erro de
 Server/Client Component passa pelo `tsc` e só falha ali.
+
+O E2E roda contra o **build de produção**, pelo mesmo motivo: a CSP do widget difere entre dev e
+produção, e é a de produção que não pode quebrar a hidratação. Ele cobre o critério §7.3 através
+de um iframe cross-document de verdade — um teste de componente renderizaria o widget inline e
+pularia silenciosamente a CSP, a política de enquadramento e a requisição cross-origin, que são
+justamente as camadas que só existem porque isto é incorporado.
 
 ---
 
@@ -104,36 +111,46 @@ nenhuma requisição carregue autoridade ambiente entre origens.
 
 ### Texto do modelo nunca vira HTML
 
-A saída do modelo é influenciável pelas fontes de conhecimento do próprio tutor. Renderizá-la
-como HTML seria a superfície de XSS mais óbvia do projeto. Ela é exibida como texto puro, com
-quebras de linha preservadas por CSS — e há teste com `<img src=x onerror=...>` provando que não
-vira elemento.
+A saída do modelo é influenciável pelas fontes de conhecimento do próprio tutor. Transformá-la em
+markup seria a superfície de XSS mais óbvia do projeto.
+
+A resposta é renderizada como **Markdown**, com `react-markdown` construindo elementos React a
+partir da árvore sintática e **descartando HTML embutido** — o que só mudaria adicionando
+`rehype-raw`, que é exatamente o plugin que transformaria uma fonte hostil em execução de script
+dentro da página do integrador. Ele não está aqui e não pode entrar. Há também uma allowlist
+explícita de elementos permitidos.
+
+A alternativa anterior — texto puro — era segura e ilegível: modelos respondem em Markdown, então
+o usuário via `**negrito**` e `*` literais. Segurança e legibilidade não estavam em conflito; só
+a implementação errada de segurança estava. Testes cobrem os dois lados: `<img onerror>` e
+`<script>` não viram elemento, e `**negrito**` vira `<strong>`.
+
+### CSP com nonce por requisição
+
+`frame-ancestors` decide quem pode enquadrar a página; `script-src` usa um **nonce novo a cada
+requisição**, carimbado nas tags de script pelo próprio Next. Um script injetado não tem como
+adivinhá-lo. O detalhe que faz funcionar é que a política precisa estar nos headers da
+_requisição_, não só da resposta — é de lá que o Next extrai o nonce.
 
 ---
 
 ## Limitações conhecidas do MVP
 
-- **CSP do widget sem `script-src`.** A diretiva que implementa o requisito — `frame-ancestors` —
-  está lá, junto de `object-src`, `base-uri` e `form-action`. Restringir scripts sob Next exige
-  nonce por requisição em cada tag; a primeira tentativa (`default-src 'self'`) bloqueou os
-  scripts de hidratação e congelou o widget. Ficou como próximo passo em vez de ser fingido com
-  `'unsafe-inline'`.
-- **Altura fixa do iframe.** O widget não emite `postMessage` de redimensionamento.
-- **Sem teste E2E de navegador.** O fluxo foi validado manualmente no navegador (widget em iframe
-  real conversando com o Gemini); um Playwright cobrindo isso é próximo passo.
+- **`style-src` mantém `'unsafe-inline'`.** O Tailwind injeta estilos em runtime e um nonce não
+  cobre isso. O vetor relevante (execução de script) está fechado.
 - **Sessão do admin morre ao fechar a aba** (`sessionStorage`), sem refresh token.
 - **Sem i18n.** Interface apenas em português.
+- **O E2E stuba o backend.** Prova o contrato do iframe, não a integração com o modelo — essa é
+  coberta pelos testes do backend e por validação manual.
 
 ---
 
 ## Próximos passos
 
-- CSP completa com nonce por requisição.
-- `postMessage` de altura para o host ajustar o iframe.
-- E2E com Playwright cobrindo `/demo` ponta a ponta.
 - Refresh token para o admin.
 - Temas configuráveis por tutor e i18n do widget.
 - SDK JS e Web Component como alternativas ao iframe.
+- E2E em mais navegadores (hoje só Chromium) e teste de acessibilidade automatizado.
 
 ---
 

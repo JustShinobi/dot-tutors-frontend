@@ -30,6 +30,7 @@ export function ChatWidget({ embedKey }: { embedKey: string }) {
   // different tree and the refs below point at nothing.
   useAutoResize({
     embedKey,
+    scrollRef: listRef,
     contentRef,
     chromeRefs: [headerRef, composerRef],
     enabled: status === "ready",

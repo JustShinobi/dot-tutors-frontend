@@ -40,3 +40,6 @@ next-env.d.ts
 
 # Ferramentas de agente (nao fazem parte do entregavel)
 .claude/
+
+# Logs locais
+*.log
