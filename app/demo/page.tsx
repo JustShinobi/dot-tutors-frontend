@@ -9,9 +9,19 @@ import { ResizingEmbed } from "@/components/embed/ResizingEmbed";
  * conversar com o backend" — with a real cross-document `<iframe>`, not a component rendered
  * inline. That distinction matters: an inline widget would silently skip the CSP, the `Origin`
  * check and the third-party storage rules that the embed path actually has to survive.
+ *
+ * The key can come from the query string as well as the environment. Requiring a rebuild to
+ * look at a different tutor made the fastest way to see this thing working a four-step chore;
+ * `?key=` costs nothing, and the key is public by design — it is about to be printed in the
+ * `src` of an iframe on this very page.
  */
-export default function DemoPage() {
-  const embedKey = process.env.NEXT_PUBLIC_DEMO_EMBED_KEY?.trim();
+export default async function DemoPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ key?: string }>;
+}) {
+  const { key } = await searchParams;
+  const embedKey = key?.trim() || process.env.NEXT_PUBLIC_DEMO_EMBED_KEY?.trim();
   const appBaseUrl = process.env.NEXT_PUBLIC_APP_BASE_URL ?? "http://localhost:3000";
 
   return (
@@ -42,22 +52,23 @@ export default function DemoPage() {
           />
         ) : (
           <div className="border-border bg-surface mt-3 space-y-2 rounded-xl border border-dashed p-6 text-sm">
-            <p className="font-medium">Configure uma chave de embed para ver o widget aqui.</p>
+            <p className="font-medium">Informe uma chave de embed para ver o widget aqui.</p>
             <ol className="text-muted list-decimal space-y-1 pl-5">
               <li>
-                Abra o{" "}
+                O seed do backend (<code className="font-mono">python -m scripts.seed</code>) ja
+                cria uma chave e imprime o link pronto.
+              </li>
+              <li>
+                Ou abra o{" "}
                 <Link href="/tutors" className="text-accent underline">
                   painel de tutores
                 </Link>
-                , escolha um tutor e va em <strong>Embed</strong>.
+                , va em <strong>Embed</strong> e crie uma chave com{" "}
+                <code className="font-mono">{appBaseUrl}</code> nas origens permitidas.
               </li>
               <li>
-                Crie uma chave com <code className="font-mono">{appBaseUrl}</code> nas origens
-                permitidas.
-              </li>
-              <li>
-                Copie a chave para <code className="font-mono">NEXT_PUBLIC_DEMO_EMBED_KEY</code> no{" "}
-                <code className="font-mono">.env.local</code> e reinicie o servidor.
+                Acesse <code className="font-mono">/demo?key=SUA_CHAVE</code> — ou defina{" "}
+                <code className="font-mono">NEXT_PUBLIC_DEMO_EMBED_KEY</code> para fixa-la.
               </li>
             </ol>
           </div>
