@@ -26,6 +26,18 @@ export interface ModelSettings {
   max_output_tokens?: number | null;
 }
 
+/** A source as the agent sees it, rather than as it was typed in. */
+export interface SourceStatus {
+  source_id: string;
+  label: string;
+  kind: SourceKind;
+  url: string | null;
+  characters: number;
+  section_count: number;
+  available: boolean;
+  error: string | null;
+}
+
 export interface Tutor {
   id: string;
   title: string;

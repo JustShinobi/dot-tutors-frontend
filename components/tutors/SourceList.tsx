@@ -1,12 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { useAuthenticatedRequest } from "@/components/auth/AuthProvider";
 import { Alert, Button, EmptyState, Field, Input, Textarea } from "@/components/ui";
-import { addSource, removeSource } from "@/lib/api/admin";
+import { addSource, getSourcesStatus, refreshSource, removeSource } from "@/lib/api/admin";
 import { ApiError } from "@/lib/api/client";
-import type { SourceKind, Tutor } from "@/lib/types";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
+import type { SourceKind, SourceStatus, Tutor } from "@/lib/types";
+
+/** Whether the agent can read this source, and how much of it there is. */
+function SourceHealth({ status }: { status: SourceStatus }) {
+  if (!status.available) {
+    return (
+      <span className="bg-danger/10 text-danger rounded-full px-2 py-0.5 text-[11px] font-medium">
+        Nao foi possivel ler
+      </span>
+    );
+  }
+
+  const sections = status.section_count > 0 ? `, ${status.section_count} secoes` : "";
+  return (
+    <span className="text-muted border-border rounded-full border px-2 py-0.5 text-[11px]">
+      {status.characters.toLocaleString("pt-BR")} caracteres{sections}
+    </span>
+  );
+}
 
 /** Manages the sources of an existing tutor, one request at a time. */
 export function SourceList({ tutor, onChanged }: { tutor: Tutor; onChanged: () => void }) {
@@ -18,6 +37,42 @@ export function SourceList({ tutor, onChanged }: { tutor: Tutor; onChanged: () =
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * Ask the backend what it can actually read.
+   *
+   * A URL that the fetcher refuses looks identical here to one that works — the difference only
+   * showed up mid-conversation, which is the worst possible moment to discover it.
+   *
+   * Loaded through `useAsyncData` rather than a hand-rolled effect: React 19 rejects a
+   * synchronous `setState` in an effect body, and that hook already encodes the correct pattern.
+   */
+  const sourceCount = tutor.sources.length;
+  const loadStatuses = useCallback(async () => {
+    if (!token || sourceCount === 0) return {} as Record<string, SourceStatus>;
+    const all = await getSourcesStatus(token, tutor.id);
+    return Object.fromEntries(all.map((item) => [item.source_id, item]));
+  }, [token, tutor.id, sourceCount]);
+
+  const {
+    data: statuses,
+    loading: checking,
+    patch: patchStatuses,
+  } = useAsyncData<Record<string, SourceStatus>>(loadStatuses);
+
+  async function handleRefresh(sourceId: string) {
+    if (!token) return;
+    setBusy(true);
+    try {
+      const updated = await refreshSource(token, tutor.id, sourceId);
+      patchStatuses((current) => ({ ...current, [sourceId]: updated }));
+    } catch (caught) {
+      if (!handleError(caught)) {
+        setError(caught instanceof ApiError ? caught.message : "Falha ao reprocessar a fonte.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleAdd() {
     if (!token) return;
@@ -72,29 +127,54 @@ export function SourceList({ tutor, onChanged }: { tutor: Tutor; onChanged: () =
         />
       ) : (
         <ul className="border-border divide-border divide-y rounded-xl border">
-          {tutor.sources.map((source) => (
-            <li key={source.id} className="flex items-center gap-3 p-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{source.label}</p>
-                {source.url ? (
-                  <a
-                    href={source.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-muted hover:text-accent truncate text-xs"
-                  >
-                    {source.url}
-                  </a>
-                ) : (
-                  <p className="text-muted text-xs">Texto colado na configuracao</p>
-                )}
-              </div>
-              <Button variant="danger" loading={busy} onClick={() => handleRemove(source.id)}>
-                Remover
-              </Button>
-            </li>
-          ))}
+          {tutor.sources.map((source) => {
+            const status = statuses?.[source.id];
+            return (
+              <li key={source.id} className="flex flex-wrap items-center gap-3 p-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-medium">{source.label}</p>
+                    {status && <SourceHealth status={status} />}
+                  </div>
+                  {source.url ? (
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-muted hover:text-accent block truncate text-xs"
+                    >
+                      {source.url}
+                    </a>
+                  ) : (
+                    <p className="text-muted text-xs">Texto colado na configuracao</p>
+                  )}
+                  {status?.error && <p className="text-danger mt-1 text-xs">{status.error}</p>}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {source.kind === "url" && (
+                    <Button
+                      variant="secondary"
+                      loading={busy}
+                      onClick={() => handleRefresh(source.id)}
+                    >
+                      Reprocessar
+                    </Button>
+                  )}
+                  <Button variant="danger" loading={busy} onClick={() => handleRemove(source.id)}>
+                    Remover
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
+      )}
+
+      {checking && (
+        <p className="text-muted text-xs" role="status" aria-live="polite">
+          Verificando o que o agente consegue ler...
+        </p>
       )}
 
       {error && <Alert>{error}</Alert>}

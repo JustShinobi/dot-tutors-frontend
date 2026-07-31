@@ -5,6 +5,7 @@ import type {
   EmbedKey,
   EmbedSnippet,
   SourceInput,
+  SourceStatus,
   TokenResponse,
   Tutor,
   TutorInput,
@@ -82,6 +83,28 @@ export function addSource(token: string, tutorId: string, payload: SourceInput):
 export function removeSource(token: string, tutorId: string, sourceId: string): Promise<void> {
   return apiFetch<void>(`/api/v1/tutors/${tutorId}/sources/${sourceId}`, {
     method: "DELETE",
+    token,
+  });
+}
+
+/**
+ * How the agent actually sees each source: fetched or not, how much text, which error.
+ *
+ * A URL that the backend refuses (private address, unsupported content type, 404) is
+ * indistinguishable from a working one in the plain source list, and only reveals itself when a
+ * user asks a question. This is the call that makes the difference visible in the panel.
+ */
+export function getSourcesStatus(token: string, tutorId: string): Promise<SourceStatus[]> {
+  return apiFetch<SourceStatus[]>(`/api/v1/tutors/${tutorId}/sources/status`, { token });
+}
+
+export function refreshSource(
+  token: string,
+  tutorId: string,
+  sourceId: string,
+): Promise<SourceStatus> {
+  return apiFetch<SourceStatus>(`/api/v1/tutors/${tutorId}/sources/${sourceId}/refresh`, {
+    method: "POST",
     token,
   });
 }
