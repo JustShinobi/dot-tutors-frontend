@@ -12,7 +12,13 @@ import { AssistantText } from "./AssistantText";
  * attacker-influenceable through the tutor's own knowledge sources, so turning it into markup
  * would be the most obvious XSS hole in this project (see AGENTS.md).
  */
-export function MessageBubble({ message }: { message: UiMessage }) {
+export function MessageBubble({
+  message,
+  onRetry,
+}: {
+  message: UiMessage;
+  onRetry?: (message: UiMessage) => void;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -41,6 +47,16 @@ export function MessageBubble({ message }: { message: UiMessage }) {
             </span>
           )}
         </div>
+
+        {message.failed && message.retryOf && onRetry && (
+          <button
+            type="button"
+            onClick={() => onRetry(message)}
+            className="border-border hover:border-accent hover:text-accent focus-visible:outline-accent rounded-full border px-2.5 py-0.5 text-[11px] focus-visible:outline-2 focus-visible:outline-offset-2"
+          >
+            Tentar novamente
+          </button>
+        )}
 
         {message.citations.length > 0 && (
           <ul className="flex flex-wrap gap-1.5" aria-label="Fontes consultadas">

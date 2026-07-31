@@ -17,7 +17,8 @@ const MAX_MESSAGE_CHARS = 2_000;
  * links out to the admin or assumes a page around it.
  */
 export function ChatWidget({ embedKey }: { embedKey: string }) {
-  const { status, tutor, messages, error, sending, activity, send } = useEmbedSession(embedKey);
+  const { status, tutor, messages, error, sending, activity, send, retry } =
+    useEmbedSession(embedKey);
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -104,7 +105,7 @@ export function ChatWidget({ embedKey }: { embedKey: string }) {
           )}
 
           {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble key={message.id} message={message} onRetry={retry} />
           ))}
 
           {activity && <ToolActivityLine activity={activity} />}

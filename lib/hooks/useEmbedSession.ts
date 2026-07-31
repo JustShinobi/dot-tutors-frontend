@@ -26,6 +26,8 @@ export interface UiMessage {
   citations: Citation[];
   streaming?: boolean;
   failed?: boolean;
+  /** The question that produced this failure, so it can be sent again. */
+  retryOf?: string;
 }
 
 interface StoredSession {
@@ -241,7 +243,14 @@ export function useEmbedSession(embedKey: string) {
           },
           onError: ({ code, message }) => {
             if (code === "SESSION_EXPIRED") clearStored(embedKey);
-            patchAssistant({ content: message, streaming: false, failed: true });
+            // The backend rolls a failed turn back entirely, so resending is not a duplicate:
+            // neither the question nor the answer was kept.
+            patchAssistant({
+              content: message,
+              streaming: false,
+              failed: true,
+              retryOf: trimmed,
+            });
             setActivity(null);
           },
         },
@@ -254,6 +263,25 @@ export function useEmbedSession(embedKey: string) {
     [state.token, sending, embedKey],
   );
 
+  const retry = useCallback(
+    (message: UiMessage) => {
+      if (!message.retryOf || sending) return;
+
+      // Drop the failed exchange before resending, so the transcript on screen matches the one
+      // the server kept — which, after a rolled-back turn, does not include either message.
+      setState((current) => {
+        const index = current.messages.findIndex((item) => item.id === message.id);
+        if (index < 0) return current;
+        // The user message immediately precedes its answer.
+        const from = index > 0 && current.messages[index - 1].role === "user" ? index - 1 : index;
+        return { ...current, messages: current.messages.slice(0, from) };
+      });
+
+      void send(message.retryOf);
+    },
+    [send, sending],
+  );
+
   return {
     status: state.status,
     tutor: state.tutor,
@@ -262,5 +290,6 @@ export function useEmbedSession(embedKey: string) {
     sending,
     activity,
     send,
+    retry,
   };
 }

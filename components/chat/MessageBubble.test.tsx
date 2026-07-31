@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import type { UiMessage } from "@/lib/hooks/useEmbedSession";
 
@@ -117,5 +118,29 @@ describe("MessageBubble", () => {
     );
 
     expect(screen.getByLabelText("Escrevendo")).toBeInTheDocument();
+  });
+
+  it("oferece tentar novamente quando a resposta falhou", async () => {
+    const onRetry = vi.fn();
+    const message: UiMessage = {
+      ...base,
+      role: "assistant",
+      content: "Nao foi possivel responder.",
+      failed: true,
+      retryOf: "Qual o valor do auxilio?",
+    };
+    render(<MessageBubble message={message} onRetry={onRetry} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+
+    expect(onRetry).toHaveBeenCalledWith(message);
+  });
+
+  it("nao oferece retry numa resposta que deu certo", () => {
+    render(
+      <MessageBubble message={{ ...base, role: "assistant", content: "ok" }} onRetry={vi.fn()} />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Tentar novamente" })).toBeNull();
   });
 });
