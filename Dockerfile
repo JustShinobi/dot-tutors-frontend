@@ -31,7 +31,10 @@ ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
     NEXT_PUBLIC_APP_BASE_URL=$NEXT_PUBLIC_APP_BASE_URL \
     NEXT_TELEMETRY_DISABLED=1
 
-RUN pnpm build
+# `public/` is empty today and git does not track empty directories, so a fresh clone has no
+# such path and the COPY in the runtime stage would fail. Creating it here keeps the build
+# working now and keeps copying real assets the day someone adds them.
+RUN mkdir -p public && pnpm build
 
 
 FROM node:22-slim AS runtime
