@@ -1,0 +1,5 @@
+# sharp: otimizacao de imagens do Next.js
+# unrs-resolver: resolucao de modulos usada pelo eslint-plugin-import
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
