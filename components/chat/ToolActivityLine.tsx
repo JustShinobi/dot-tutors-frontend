@@ -17,8 +17,23 @@ const TOOL_LABELS: Record<string, string> = {
   fetch_source: "Lendo o documento",
 };
 
+/**
+ * Naming the source is the point: "procurando nas fontes" says the agent is busy, while
+ * "procurando em *Politica de trabalho remoto*" says it is reading a specific document — which
+ * is the difference between an answer that was looked up and one that was invented.
+ *
+ * `source` is absent when the tool takes no source, and when the model asked for an id that does
+ * not exist. Both fall back to the generic wording rather than showing a broken name.
+ */
+const TOOLS_WITH_SOURCE: Record<string, string> = {
+  get_source_outline: "Localizando a secao certa em",
+  search_source: "Procurando em",
+  fetch_source: "Lendo",
+};
+
 export function ToolActivityLine({ activity }: { activity: ToolActivity }) {
-  const label = (activity.tool && TOOL_LABELS[activity.tool]) ?? "Consultando o material";
+  const prefix = activity.tool ? TOOLS_WITH_SOURCE[activity.tool] : undefined;
+  const generic = (activity.tool && TOOL_LABELS[activity.tool]) ?? "Consultando o material";
 
   return (
     <p className="text-muted flex items-center gap-2 px-1 text-xs" role="status" aria-live="polite">
@@ -26,7 +41,13 @@ export function ToolActivityLine({ activity }: { activity: ToolActivity }) {
         aria-hidden="true"
         className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"
       />
-      {label}
+      {prefix && activity.source ? (
+        <span>
+          {prefix} <span className="font-medium">{activity.source}</span>
+        </span>
+      ) : (
+        generic
+      )}
       <span className="animate-pulse">&hellip;</span>
     </p>
   );
