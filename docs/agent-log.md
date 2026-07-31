@@ -90,3 +90,60 @@ script; isso virou item de "próximos passos" no README, em vez de ser fingido c
 
 **Lição.** Cabeçalho de segurança copiado por reflexo é dívida disfarçada de rigor. Uma CSP só vale
 depois de carregar a página de verdade — e o teste tem que ser o caminho real, dentro do iframe.
+
+---
+
+## #6 — O stream que terminava em silêncio
+
+**Contexto.** Uma revisão do backend encontrou um bug no tratador de erro do SSE (registrado no
+`agent-log.md` de lá, #13): num certo cenário a resposta abortava sem emitir `event: error`.
+
+**O que isso revelou aqui.** O cliente tinha a metade correspondente do problema. O laço de
+leitura era:
+
+```ts
+const { done, value } = await reader.read();
+if (done) break;
+```
+
+Se o stream fechasse sem `done` nem `error`, `streamChat` retornava normalmente **sem chamar
+handler nenhum**. A mensagem do assistente ficava com `streaming: true` para sempre — um cursor
+piscando à espera de um token que nunca viria.
+
+**Correção.** Uma flag `sawTerminalEvent`; um stream que fecha sem evento terminal vira
+`STREAM_INCOMPLETE`. Com o cuidado de não disparar quando foi o próprio cliente que abortou, e de
+não somar um erro extra quando o frame terminal _foi_ um `error`.
+
+**Lição.** Um protocolo com evento terminal precisa tratar a ausência dele como falha. "O stream
+acabou" e "a resposta acabou" não são a mesma coisa, e só um dos dois estava sendo verificado.
+
+---
+
+## #7 — O `setState` em effect, de novo
+
+**Contexto.** A tela de fontes passou a mostrar o que o agente consegue ler em cada uma, o que
+exige uma chamada assíncrona ao montar. Escrevi um `useEffect` com `setChecking(true)` no corpo.
+
+**O lint pegou** — a mesma regra `react-hooks/set-state-in-effect` da iteração #4. E o projeto já
+tinha `useAsyncData`, criado exatamente para esse padrão, na mesma iteração.
+
+**Correção.** Reusar `useAsyncData`. Duas linhas em vez de vinte, e a regra some.
+
+**Lição.** O erro não foi técnico, foi de leitura: a solução já existia no repositório e eu
+reinventei uma pior. Vale reler o que já foi construído antes de resolver de novo.
+
+---
+
+## #8 — "Consultando" o quê, exatamente
+
+**Contexto.** A linha de atividade mostrava textos genéricos ("Procurando nas fontes"). O evento
+SSE trazia um campo `source` — que o componente ignorava.
+
+**Por que ignorava.** O backend preenchia esse campo com o **id** da fonte (um UUID), sob um campo
+chamado `source_label`. Exibir aquilo seria pior que o texto genérico, então alguém acertou em
+descartá-lo — e o problema real, do outro lado, ficou escondido.
+
+**Correção nos dois repositórios.** O backend resolve o id para o rótulo (e devolve `null` quando
+o modelo alucina um id que não existe); o componente passou a nomear a fonte: "Procurando em
+_Política de trabalho remoto_…". É a linha em que a estratégia agêntica deixa de ser detalhe de
+implementação para virar algo que o usuário vê.

@@ -10,13 +10,48 @@ carregada dentro do `<iframe>` do integrador.
 
 ---
 
+## Arquitetura
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  SITE DO INTEGRADOR (terceiro)                                │
+│    <iframe src="https://SEU-APP/embed/pk_live_abc123">        │
+└───────────────────────────┬───────────────────────────────────┘
+                            │ (1) o navegador carrega o iframe
+                            ▼
+┌───────────────────────────────────────────────────────────────┐
+│  ESTE APP — Next.js 16 (App Router, TS, Tailwind)             │
+│                                                               │
+│  middleware.ts                                                │
+│    └─ consulta GET /api/v1/embed/config?embed_key=…           │
+│       e emite Content-Security-Policy: frame-ancestors <…>    │
+│       (quem PODE enquadrar — decidido por chave, em runtime)  │
+│                                                               │
+│  /embed/[embedKey]   ← layout mínimo: só o widget             │
+│  /login /tutors …    ← painel administrativo (JWT)            │
+│  /demo               ← página que simula o site do cliente    │
+└───────────────────────────┬───────────────────────────────────┘
+                            │ (2) POST /api/v1/embed/session  { embed_key } + Origin
+                            │ (3) POST /api/v1/embed/chat     (SSE) Bearer <session_token>
+                            ▼
+┌───────────────────────────────────────────────────────────────┐
+│  BACKEND — FastAPI (repo dot-tutors-backend)                  │
+│  valida chave × Origin · emite token de sessão · roda o agente│
+└───────────────────────────────────────────────────────────────┘
+```
+
+O widget fala **direto** com a API, sem passar por um BFF: um proxy intermediário só adicionaria
+uma camada para bufferizar o SSE e reescrever o `Origin` que autoriza o embed.
+
+---
+
 ## Superfícies
 
 | Rota                                     | Papel        | Observação                                                        |
 | ---------------------------------------- | ------------ | ----------------------------------------------------------------- |
 | `/`                                      | Índice       | Atalhos para o admin e para a demonstração                        |
 | `/login`                                 | Admin        | Autenticação por JWT                                              |
-| `/tutors`, `/tutors/new`, `/tutors/[id]` | Admin        | CRUD, ativação/desativação, fontes                                |
+| `/tutors`, `/tutors/new`, `/tutors/[id]` | Admin        | CRUD, ativação/desativação, fontes e estado de leitura delas      |
 | `/tutors/[id]/embed`                     | Admin        | Chaves, origens permitidas, snippet copiável e prévia             |
 | `/embed/[embedKey]`                      | **Widget**   | Renderiza **somente** o chat, para uso em `<iframe>` (PRD §4.2.1) |
 | `/demo`                                  | Demonstração | Simula o site de um integrador embedando o widget (PRD §7.3)      |
@@ -37,9 +72,70 @@ pnpm dev
 Aplicação em <http://localhost:3000>. Entre com as credenciais do seed do backend
 (`admin@example.com`).
 
-Para ver o widget em `/demo`, crie uma chave de embed no painel (**Tutores → tutor → Embed**),
-com `http://localhost:3000` nas origens permitidas, e copie-a para `NEXT_PUBLIC_DEMO_EMBED_KEY`
-no `.env.local`.
+O seed do backend já cria uma chave de embed e imprime o link pronto — abra
+`/demo?key=SUA_CHAVE`. Para fixá-la, defina `NEXT_PUBLIC_DEMO_EMBED_KEY` no `.env.local`.
+
+---
+
+## Fluxo de embed ponta a ponta
+
+Do "criar tutor" ao "iframe respondendo", com o que acontece em cada passo:
+
+1. **Criar o tutor** em `/tutors/new`: título, instruções de comportamento e fontes (URL pública
+   ou texto colado). Na tela de edição, cada fonte mostra **quanto texto o agente conseguiu ler**
+   — ou o erro, se a URL for inalcançável. Descobrir isso aqui é o ponto; antes só aparecia no
+   meio de uma conversa.
+2. **Gerar a chave** em `/tutors/[id]/embed`, com o domínio do integrador nas origens permitidas.
+   A tela devolve o snippet pronto:
+
+   ```html
+   <iframe
+     src="https://SEU-APP/embed/pk_live_abc123"
+     title="Tutor: Guia de Produto"
+     width="400"
+     height="620"
+     style="border:0;border-radius:12px"
+     loading="lazy"
+     referrerpolicy="strict-origin-when-cross-origin"
+   ></iframe>
+   ```
+
+3. **O integrador cola o snippet.** Ao carregar, o `middleware.ts` deste app consulta a
+   configuração da chave no backend e emite `frame-ancestors` com as origens permitidas — se o
+   site não estiver na lista, o navegador recusa renderizar.
+4. **O widget abre a sessão** (`POST /embed/session`) enviando a chave; o backend confere o header
+   `Origin` contra a allowlist e devolve um token de sessão curto, o perfil público do tutor e o
+   histórico.
+5. **A conversa** vai por `POST /embed/chat` em SSE. Os tokens aparecem à medida que chegam, e a
+   linha de atividade nomeia a fonte sendo consultada ("Procurando em _Política de trabalho
+   remoto_…") — é onde a estratégia agêntica fica visível para quem está olhando.
+6. **As citações** aparecem como chips no rodapé da resposta, com link para a fonte.
+
+Chave revogada, origem removida da allowlist ou tutor desativado: o widget informa a
+indisponibilidade em texto claro, sem quebrar a página do integrador.
+
+---
+
+## Deploy com Docker
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_API_BASE_URL=https://api-tutores.seu-dominio.com \
+  --build-arg NEXT_PUBLIC_APP_BASE_URL=https://tutores.seu-dominio.com \
+  -t dot-tutors-frontend .
+docker run -p 3000:3000 dot-tutors-frontend
+```
+
+Duas coisas que só mordem em produção:
+
+- **`NEXT_PUBLIC_*` é inlinado no bundle em tempo de build.** Mudar a URL da API exige um
+  rebuild; reiniciar o container não adianta.
+- **`API_INTERNAL_BASE_URL`** é a URL que o _servidor_ usa (o middleware de CSP). Em Docker
+  aponta para o hostname do serviço (`http://api:8000`), não para o domínio público — assim o CSP
+  continua sendo montado mesmo que o DNS público não resolva de dentro da rede de containers.
+
+A pilha completa (banco + API + este app) está em `docker-compose.deploy.yml` no repositório do
+backend. A imagem é construída e iniciada no CI a cada push.
 
 ---
 
@@ -65,12 +161,13 @@ pnpm verify        # lint + format:check + typecheck + test
 | `pnpm lint`                         | ESLint (config do Next + integração com Prettier) |
 | `pnpm format` / `pnpm format:check` | Prettier                                          |
 | `pnpm typecheck`                    | `tsc --noEmit`                                    |
-| `pnpm test`                         | Vitest + Testing Library (41 testes)              |
+| `pnpm test`                         | Vitest + Testing Library (50 testes)              |
 | `pnpm test:e2e`                     | Playwright: 8 cenários por um `<iframe>` real     |
 | `pnpm build`                        | Build de produção — parte do gate, não um detalhe |
 
-Tudo roda no CI a cada push e pull request. O build entra no gate porque um erro de
-Server/Client Component passa pelo `tsc` e só falha ali.
+Tudo roda no CI a cada push e pull request, mais um job que **constrói a imagem Docker e verifica
+que ela sobe e serve uma página**. O build entra no gate porque um erro de Server/Client Component
+passa pelo `tsc` e só falha ali.
 
 O E2E roda contra o **build de produção**, pelo mesmo motivo: a CSP do widget difere entre dev e
 produção, e é a de produção que não pode quebrar a hidratação. Ele cobre o critério §7.3 através
@@ -142,6 +239,8 @@ _requisição_, não só da resposta — é de lá que o Next extrai o nonce.
 - **Sem i18n.** Interface apenas em português.
 - **O E2E stuba o backend.** Prova o contrato do iframe, não a integração com o modelo — essa é
   coberta pelos testes do backend e por validação manual.
+- **`NEXT_PUBLIC_API_BASE_URL` é fixada no build.** Um mesmo artefato não serve dois ambientes;
+  seria preciso ler a configuração em runtime a partir do servidor.
 
 ---
 
@@ -151,6 +250,7 @@ _requisição_, não só da resposta — é de lá que o Next extrai o nonce.
 - Temas configuráveis por tutor e i18n do widget.
 - SDK JS e Web Component como alternativas ao iframe.
 - E2E em mais navegadores (hoje só Chromium) e teste de acessibilidade automatizado.
+- Configuração de runtime em vez de build-time, para promover a mesma imagem entre ambientes.
 
 ---
 
