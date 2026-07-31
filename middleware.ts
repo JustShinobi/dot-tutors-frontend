@@ -1,24 +1,24 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 /**
- * Per-tutor framing policy for the widget.
+ * Framing policy and Content-Security-Policy for the widget page.
  *
- * `Content-Security-Policy: frame-ancestors` is what actually stops an unauthorised site from
- * putting the widget in an iframe — and it is a *response header on the framed page*, so only
- * the server hosting that page can emit it. This is the reason the widget lives in this Next.js
- * app instead of a static bucket: the allowlist is per embed key and lives in the database, so
- * emitting the header requires a request-time lookup.
+ * **`frame-ancestors`** is what actually stops an unauthorised site from putting the widget in
+ * an iframe — and it is a *response header on the framed page*, so only the server hosting that
+ * page can emit it. This is the reason the widget lives in this Next.js app instead of a static
+ * bucket: the allowlist is per embed key and lives in the database, so emitting the header
+ * requires a request-time lookup.
  *
  * It complements, rather than duplicates, the backend check: `frame-ancestors` stops the page
  * from *rendering* in a hostile site; `EmbedService.authorize` stops the session from *opening*.
  * The first is enforced by the browser, the second by the server. Neither alone is enough.
  *
- * **Why `script-src` is not locked down here.** An earlier version added `default-src 'self'`,
- * which looks thorough and silently broke the widget: it blocks the inline bootstrap scripts
- * Next.js injects for hydration, so the page froze on its server-rendered state and never
- * connected. Restricting scripts properly under Next requires per-request nonces threaded
- * through every script tag — real work, and listed in the README as a next step rather than
- * faked with a `'unsafe-inline'` that would grant back exactly what it pretends to restrict.
+ * **`script-src` uses a per-request nonce.** An earlier version tried `default-src 'self'`,
+ * which looks thorough and silently broke the page: it blocks the inline bootstrap scripts
+ * Next.js injects for hydration, so the widget froze on its server-rendered state. The fix is
+ * not `'unsafe-inline'` — that would grant back exactly what the directive promises to
+ * restrict. It is a fresh nonce per request, forwarded to Next through the `x-nonce` header so
+ * it can stamp every script tag it emits.
  */
 
 const API_BASE_URL = (
@@ -27,36 +27,74 @@ const API_BASE_URL = (
   "http://localhost:8000"
 ).replace(/\/$/, "");
 
+/** The browser talks to the API directly from inside the iframe, so it must be connect-able. */
+const PUBLIC_API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+).replace(/\/$/, "");
+
+const IS_DEV = process.env.NODE_ENV !== "production";
+
 export const config = {
   matcher: "/embed/:embedKey*",
 };
 
 export async function middleware(request: NextRequest) {
-  const response = NextResponse.next();
-
   const embedKey = request.nextUrl.pathname.split("/")[2];
-  if (!embedKey) return response;
+  const nonce = generateNonce();
 
-  const config = await fetchEmbedConfig(embedKey);
-  const frameAncestors = resolveFrameAncestors(config);
+  const config = embedKey ? await fetchEmbedConfig(embedKey) : null;
+  const policy = buildPolicy({ frameAncestors: resolveFrameAncestors(config), nonce });
 
-  response.headers.set(
-    "Content-Security-Policy",
-    [
-      // The directive that implements the requirement: who may frame this page.
-      `frame-ancestors ${frameAncestors}`,
-      // Cheap hardening that costs nothing here: the widget loads no plugins, has no forms
-      // that post anywhere, and never needs to rewrite relative URLs.
-      "object-src 'none'",
-      "base-uri 'none'",
-      "form-action 'none'",
-    ].join("; "),
-  );
-  // Legacy header for browsers that predate frame-ancestors; ALLOW-FROM was never widely
-  // supported, so the modern directive above is the one that does the work.
+  const requestHeaders = new Headers(request.headers);
+  // Next parses the CSP from the *request* headers to find the nonce and stamp it on every
+  // script tag it renders. Setting it only on the response would leave those scripts unnonced —
+  // the browser would refuse them and the widget would freeze on its server-rendered state,
+  // which is the same symptom the `default-src 'self'` attempt produced.
+  requestHeaders.set("Content-Security-Policy", policy);
+  // Exposed separately so the app can read it via `headers()` if it ever renders its own
+  // inline script.
+  requestHeaders.set("x-nonce", nonce);
+
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set("Content-Security-Policy", policy);
+  // ALLOW-FROM was never widely supported; `frame-ancestors` above is what does the work, and
+  // leaving a stale X-Frame-Options would only override it with something coarser.
   response.headers.delete("X-Frame-Options");
 
   return response;
+}
+
+function generateNonce(): string {
+  // Web Crypto: the Edge runtime has no Node `crypto` module.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function buildPolicy({ frameAncestors, nonce }: { frameAncestors: string; nonce: string }): string {
+  const scriptSrc = [
+    `'nonce-${nonce}'`,
+    // Lets a modern browser trust scripts loaded *by* a nonced script, which is how Next pulls
+    // in its chunks. Older browsers ignore it and fall back to the nonce alone.
+    "'strict-dynamic'",
+    // Ignored wherever 'strict-dynamic' is honoured; kept as the fallback for those that do not.
+    "'self'",
+    // React Fast Refresh compiles with eval in development only.
+    ...(IS_DEV ? ["'unsafe-eval'"] : []),
+  ];
+
+  return [
+    `frame-ancestors ${frameAncestors}`,
+    "default-src 'self'",
+    `script-src ${scriptSrc.join(" ")}`,
+    // Tailwind injects style tags at runtime; a nonce cannot cover those.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    `connect-src 'self' ${PUBLIC_API_BASE_URL}${IS_DEV ? " ws: http://localhost:*" : ""}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
 }
 
 interface EmbedConfig {
