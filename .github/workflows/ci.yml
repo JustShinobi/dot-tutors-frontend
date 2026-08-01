@@ -7,7 +7,10 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancelar a execucao anterior economiza runner em pull request. Na main, nao: a
+  # execucao cancelada pode estar no meio de um deploy, e matar o job entre a troca do
+  # symlink e o restart deixaria o servidor num estado que ninguem escolheu.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # The build must not depend on a reachable backend; these only fill the public URLs.
@@ -108,3 +111,105 @@ jobs:
           echo "o frontend nao subiu"
           docker logs web
           exit 1
+
+  deploy:
+    name: Deploy para o LXC
+    needs: [quality]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    runs-on: [self-hosted, proxmox-lxc, crossbuild, mode-ephemeral]
+
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_APP_URL }}
+
+    concurrency:
+      group: deploy-web-production
+      cancel-in-progress: false
+
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # Rebuild, e nao reaproveitamento do artefato do job `quality`: aquele foi
+        # compilado com as URLs de localhost do bloco `env` no topo do arquivo. As
+        # `NEXT_PUBLIC_*` sao inlinadas no bundle do cliente em tempo de build, entao o
+        # build de producao precisa das URLs publicas de verdade — nao ha como injeta-las
+        # depois, na partida do processo.
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.PUBLIC_API_URL }}
+          NEXT_PUBLIC_APP_BASE_URL: ${{ vars.PUBLIC_APP_URL }}
+        run: pnpm build
+
+      - name: Montar o bundle standalone
+        # `output: "standalone"` produz um servidor autocontido, mas o Next deixa dois
+        # diretorios de fora dele de proposito, porque num CDN eles seriam servidos por
+        # outra coisa: `.next/static` e `public`. Aqui nao ha CDN — o proprio node serve
+        # tudo —, entao eles voltam para dentro. Sem este passo a pagina sobe sem CSS e
+        # sem JS, que e o modo de falha classico deste modo de build.
+        run: |
+          rm -rf dist
+          cp -r .next/standalone dist
+          mkdir -p dist/.next
+          cp -r .next/static dist/.next/static
+          cp -r public dist/public
+          test -f dist/server.js
+
+      - name: Chave SSH
+        # Escrita em RUNNER_TEMP e nao em ~/.ssh: o runner e self-hosted, entao o HOME
+        # sobrevive entre execucoes e entre repositorios. Deixar uma chave privada la
+        # seria oferece-la ao proximo job que rodar na mesma maquina.
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY"     > "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+
+      - name: Enviar a release
+        # So o resultado do build viaja. O fonte, o node_modules de desenvolvimento e o
+        # toolchain ficam no runner: o LXC nunca precisa de pnpm nem dos 400 MB de
+        # dependencias de build.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          rsync -az --delete \
+            -e "ssh -i $RUNNER_TEMP/deploy_key -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o IdentitiesOnly=yes" \
+            dist/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/dot-tutors/web/releases/${{ github.sha }}/"
+
+      - name: Ativar a release
+        # Mesmo contrato do backend: entregue os bytes, chame o comando de infra. Este
+        # repositorio nao sabe o que ha do outro lado — nem precisa saber.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i "$RUNNER_TEMP/deploy_key" \
+              -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+              -o IdentitiesOnly=yes \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              "sudo /usr/local/sbin/dot-tutors-activate web ${{ github.sha }}"
+
+      - name: Fumaca no dominio publico
+        # A ativacao ja conferiu o loopback. Este passo cobre o que ela nao alcanca: DNS,
+        # certificado e proxy reverso. Sem ele, um proxy mal configurado passa pelo
+        # pipeline inteiro em verde.
+        run: |
+          curl -fsS --max-time 10 "${{ vars.PUBLIC_APP_URL }}/" > /dev/null
+          echo "frontend publico respondeu"
