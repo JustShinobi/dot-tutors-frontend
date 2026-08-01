@@ -163,6 +163,11 @@ jobs:
         # sem JS, que e o modo de falha classico deste modo de build.
         run: |
           rm -rf dist
+          # `public/` esta vazio hoje e o git nao versiona diretorio vazio, entao um clone
+          # limpo nao tem esse caminho e o `cp` abaixo falha. Mesmo tratamento que o
+          # Dockerfile ja faz pelo mesmo motivo: criar antes mantem o passo funcionando
+          # agora e continua copiando os assets reais no dia em que alguem adicionar um.
+          mkdir -p public
           cp -r .next/standalone dist
           mkdir -p dist/.next
           cp -r .next/static dist/.next/static
