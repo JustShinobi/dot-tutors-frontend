@@ -27,7 +27,14 @@ export default function EmbedPage() {
   const [busy, setBusy] = useState(false);
 
   const [label, setLabel] = useState("");
-  const [origins, setOrigins] = useState("http://localhost:3000");
+  // Sugerida a partir da URL publica desta instalacao, e nao de um localhost fixo. O campo e
+  // enviado como esta, e o backend so aplica `EMBED_DEFAULT_ORIGINS` quando ele chega vazio —
+  // entao um valor fixo aqui vencia a configuracao do ambiente e toda chave criada pelo painel
+  // em producao nascia com uma allowlist que nao corresponde a nenhum dominio real. O widget
+  // respondia 403 na abertura da sessao, sem indicar o motivo.
+  const [origins, setOrigins] = useState(
+    process.env.NEXT_PUBLIC_APP_BASE_URL ?? "http://localhost:3000",
+  );
 
   const load = useCallback(async (): Promise<{ tutor: Tutor; keys: EmbedKey[] }> => {
     const [tutor, keys] = await Promise.all([
